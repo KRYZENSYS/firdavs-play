@@ -2,12 +2,13 @@
 Firdavs Play — unified entry point for Replit.
 - FastAPI HTTP server on $PORT
 - Serves /api/v1/* (auth, users, games, missions, achievements, leaderboard, admin)
-- Serves built frontend from /static (single port — no separate web server needed)
-- Telegram bot runs in background via aiogram polling
+- Serves built frontend from /static
+- Telegram bot runs in background via aiogram polling (with auto-reconnect)
+- Self-ping keeps Replit VM alive
 """
 import asyncio
 import os
-import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -19,8 +20,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from app.core.config import settings
 from app.core.database import init_db
 from app.api.v1 import api_router
+from app.bot import get_bot_state
+from app.uptime import self_ping_loop
 
 STATIC_DIR = Path(__file__).parent / "static"
+STARTED_AT = time.time()
 
 
 @asynccontextmanager
@@ -29,25 +33,31 @@ async def lifespan(app: FastAPI):
     await init_db()
     print("✅ Database ready")
 
-    # Start Telegram bot in background (only if token provided)
+    # Start Telegram bot in background (with auto-reconnect)
     bot_task = None
     if settings.BOT_TOKEN:
         from app.bot import start_bot
-        bot_task = asyncio.create_task(start_bot())
-        print("🤖 Telegram bot started")
+        bot_task = asyncio.create_task(start_bot(), name="telegram-bot")
+        print("🤖 Telegram bot started (auto-reconnect enabled)")
     else:
         print("⚠️  BOT_TOKEN not set — running without Telegram bot")
+
+    # Start self-ping to keep Replit alive
+    port = int(os.environ.get("PORT", 3000))
+    uptime_task = asyncio.create_task(self_ping_loop(port), name="self-ping")
+    print("💓 Self-ping started (keeps server alive)")
 
     yield
 
     # Shutdown
-    if bot_task:
-        bot_task.cancel()
-        try:
-            await bot_task
-        except asyncio.CancelledError:
-            pass
-    print("👋 Shutdown complete")
+    print("👋 Shutting down...")
+    for task in (bot_task, uptime_task):
+        if task:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 app = FastAPI(
@@ -70,10 +80,19 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api/v1")
 
 
-# Health check (for Replit)
+# Health check (for UptimeRobot, Replit always-on, etc.)
 @app.get("/healthz")
 async def healthz():
-    return {"status": "ok", "service": "firdavs-play"}
+    bot = get_bot_state()
+    return {
+        "status": "ok",
+        "service": "firdavs-play",
+        "uptime_seconds": int(time.time() - STARTED_AT),
+        "bot": {
+            "running": bot.get("running", False),
+            "errors": bot.get("errors", 0),
+        },
+    }
 
 
 # Serve frontend static files (SPA fallback to index.html)
@@ -86,14 +105,11 @@ if STATIC_DIR.exists():
 
     @app.get("/{path:path}")
     async def spa(path: str):
-        # Don't shadow API routes
         if path.startswith("api/") or path == "healthz":
             return JSONResponse({"detail": "Not Found"}, status_code=404)
-        # Serve real file if it exists
         f = STATIC_DIR / path
         if f.is_file():
             return FileResponse(f)
-        # SPA fallback
         return FileResponse(STATIC_DIR / "index.html")
 else:
     @app.get("/")
@@ -109,5 +125,4 @@ else:
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 3000))
-    # 0.0.0.0 is required for Replit
     uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
