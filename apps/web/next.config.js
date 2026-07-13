@@ -1,12 +1,13 @@
 /** @type {import('next').NextConfig} */
+const repoName = "firdavs-play";
+const basePath = process.env.NODE_ENV === "production" ? `/${repoName}` : "";
+
 const nextConfig = {
+  output: "export",
+  basePath,
+  trailingSlash: true,
+  images: { unoptimized: true },
   reactStrictMode: true,
-  images: {
-    remotePatterns: [
-      { protocol: "https", hostname: "t.me" },
-      { protocol: "https", hostname: "cdn.telegram.org" },
-    ],
-  },
   experimental: {
     optimizePackageImports: ["lucide-react", "framer-motion"],
   },
