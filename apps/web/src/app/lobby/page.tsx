@@ -6,6 +6,7 @@ import { GAMES } from "@/lib/games";
 import { useAuth } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
 import { GameCard } from "@/components/GameCard";
+import { BottomNav } from "@/components/BottomNav";
 import { Flame, Sparkles, Crown, Zap, TrendingUp } from "lucide-react";
 
 export default function LobbyPage() {
@@ -19,19 +20,13 @@ export default function LobbyPage() {
       <TopBar />
 
       <div className="px-4 py-6 max-w-2xl mx-auto">
-        {/* Greeting */}
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-6"
-        >
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
           <p className="text-cyber-muted text-sm">Welcome back,</p>
           <h1 className="font-display text-3xl font-bold">
             {user?.first_name || "Player"} <span className="inline-block animate-float">👋</span>
           </h1>
         </motion.div>
 
-        {/* Hero Banner */}
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -55,7 +50,6 @@ export default function LobbyPage() {
           </div>
         </motion.div>
 
-        {/* Quick stats */}
         <div className="grid grid-cols-3 gap-3 mb-6">
           <Link href="/profile" className="glass rounded-2xl p-4 cyber-glow">
             <Zap className="w-5 h-5 text-cyber-cyan mb-1" />
@@ -74,7 +68,6 @@ export default function LobbyPage() {
           </Link>
         </div>
 
-        {/* Hot games */}
         {hotGames.length > 0 && (
           <section className="mb-6">
             <div className="flex items-center gap-2 mb-3">
@@ -82,14 +75,11 @@ export default function LobbyPage() {
               <h2 className="font-display text-lg font-bold">Hot Games</h2>
             </div>
             <div className="grid grid-cols-1 gap-3">
-              {hotGames.map((g) => (
-                <GameCard key={g.id} game={g} large />
-              ))}
+              {hotGames.map((g) => <GameCard key={g.id} game={g} large />)}
             </div>
           </section>
         )}
 
-        {/* New games */}
         {newGames.length > 0 && (
           <section className="mb-6">
             <div className="flex items-center gap-2 mb-3">
@@ -97,23 +87,20 @@ export default function LobbyPage() {
               <h2 className="font-display text-lg font-bold">New</h2>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              {newGames.map((g) => (
-                <GameCard key={g.id} game={g} />
-              ))}
+              {newGames.map((g) => <GameCard key={g.id} game={g} />)}
             </div>
           </section>
         )}
 
-        {/* All games */}
         <section className="mb-6">
           <h2 className="font-display text-lg font-bold mb-3">All Games</h2>
           <div className="grid grid-cols-2 gap-3">
-            {allGames.map((g) => (
-              <GameCard key={g.id} game={g} />
-            ))}
+            {allGames.map((g) => <GameCard key={g.id} game={g} />)}
           </div>
         </section>
       </div>
+
+      <BottomNav />
     </div>
   );
 }
