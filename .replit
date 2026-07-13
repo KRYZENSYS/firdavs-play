@@ -1,0 +1,17 @@
+run = "bash start.sh"
+entrypoint = "start.sh"
+
+[nix]
+channel = "stable-22_11"
+
+[deployment]
+run = ["bash", "start.sh"]
+deploymentTarget = "vm"
+
+[env]
+PORT = "3000"
+PYTHONUNBUFFERED = "1"
+NPM_CONFIG_PRODUCTION = "false"
+
+[gitHubImport]
+requiredFiles = [".replit", "replit.nix", "start.sh", "package.json"]
