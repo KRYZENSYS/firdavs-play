@@ -2,7 +2,8 @@ import axios from "axios";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Empty = same origin (Replit). Set NEXT_PUBLIC_API_URL to override.
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 export const api = axios.create({
   baseURL: `${API_URL}/api/v1`,
@@ -40,6 +41,7 @@ export interface User {
   level: number;
   games_played: number;
   is_premium: boolean;
+  is_admin?: boolean;
   created_at: string;
 }
 
@@ -112,7 +114,7 @@ export async function claimMission(id: number) {
 }
 
 export async function listAchievements() {
-  const { data } = await api.get("/achievements");
+  const { data } = await api.get("/missions/achievements");
   return data;
 }
 
