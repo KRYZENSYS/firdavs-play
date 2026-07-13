@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Replit startup: install deps, build web, start API (which also serves built web + bot)
+# Replit startup: install deps, build web, start unified server (API + bot + frontend + self-ping)
 set -e
 
 echo "╔════════════════════════════════════════╗"
 echo "║  🎮 FIRDAVS PLAY — Starting on Replit ║"
+echo "║  💓 Bot auto-reconnect + Uptime enabled ║"
 echo "╚════════════════════════════════════════╝"
 
 # Frontend deps
@@ -29,12 +30,13 @@ if [ ! -d "apps/api/venv" ]; then
   cd ../..
 fi
 
-# Copy frontend build into api/static (single port)
+# Copy frontend build into api/static
 mkdir -p apps/api/static
+rm -rf apps/api/static/*
 cp -r apps/web/out/* apps/api/static/ 2>/dev/null || true
 
-# Start API (serves /api/v1, Telegram bot, and frontend static)
-echo "🚀 Launching unified server on port ${PORT:-3000}..."
+# Start unified server
+echo "🚀 Launching on port ${PORT:-3000}..."
 cd apps/api
 source venv/bin/activate 2>/dev/null || true
 exec python main.py
