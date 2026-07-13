@@ -1,0 +1,50 @@
+# Node
+node_modules/
+.next/
+.turbo/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Docker
+postgres_data/
+redis_data/
+
+# Logs
+*.log
+logs/
+
+# Backups
+backups/*.sql
+backups/*.tar.gz
