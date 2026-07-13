@@ -1,74 +1,108 @@
-"""Security helpers: JWT, password hashing, telegram init-data validation."""
-from datetime import datetime, timedelta, timezone
+"""JWT auth helpers, Telegram initData validation, password hashing."""
+from __future__ import annotations
+
 import hashlib
 import hmac
 import json
-from urllib.parse import unquote
+import secrets
+import time
+import urllib.parse
+from typing import Any
 
-from jose import JWTError, jwt
-from passlib.context import CryptContext
+import jwt
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_session
+from app.models import User
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
-
-
-def create_access_token(subject: str | int, extra: dict | None = None) -> str:
-    now = datetime.now(timezone.utc)
+def create_token(user_id: int, telegram_id: int) -> str:
     payload = {
-        "sub": str(subject),
-        "iat": now,
-        "exp": now + timedelta(minutes=settings.JWT_EXPIRES_MIN),
+        "sub": str(user_id),
+        "tid": telegram_id,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + settings.JWT_TTL_HOURS * 3600,
     }
-    if extra:
-        payload.update(extra)
-    return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+    return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALG)
 
 
-def decode_token(token: str) -> dict | None:
-    try:
-        return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
-    except JWTError:
-        return None
+def decode_token(token: str) -> dict[str, Any]:
+    return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALG])
 
 
 def validate_telegram_init_data(init_data: str) -> dict | None:
-    """Validate Telegram WebApp initData and return user payload or None."""
+    """Validate Telegram WebApp initData signature.
+    https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+    """
     try:
-        params = dict(p.split("=", 1) for p in unquote(init_data).split("&") if "=" in p)
-    except ValueError:
+        parsed = dict(urllib.parse.parse_qsl(init_data, keep_blank_values=True))
+    except Exception:
         return None
 
-    received_hash = params.pop("hash", None)
-    if not received_hash:
+    if "hash" not in parsed:
         return None
 
-    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(params.items()))
+    received_hash = parsed.pop("hash")
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
 
-    secret_key = hmac.new(b"WebAppData", settings.TELEGRAM_BOT_TOKEN.encode(), hashlib.sha256).digest()
+    secret_key = hmac.new(b"WebAppData", settings.BOT_TOKEN.encode(), hashlib.sha256).digest()
     computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(computed_hash, received_hash):
         return None
 
-    user_raw = params.get("user")
-    if not user_raw:
-        return None
+    if "user" in parsed:
+        try:
+            parsed["user"] = json.loads(parsed["user"])
+        except Exception:
+            return None
+    return parsed
 
+
+def make_referral_code() -> str:
+    return secrets.token_urlsafe(6)[:10].upper().replace("_", "X").replace("-", "Y")
+
+
+async def get_current_user(
+    creds: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_session),
+) -> User:
+    if not creds:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing token")
     try:
-        return json.loads(user_raw)
-    except json.JSONDecodeError:
+        payload = decode_token(creds.credentials)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
+
+    user_id = int(payload["sub"])
+    res = await db.execute(select(User).where(User.id == user_id))
+    user = res.scalar_one_or_none()
+    if not user or user.is_banned:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or banned")
+    return user
+
+
+async def get_optional_user(
+    creds: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_session),
+) -> User | None:
+    if not creds:
+        return None
+    try:
+        return await get_current_user(creds, db)
+    except HTTPException:
         return None
 
 
-def provably_fair_seed(server_seed: str, client_seed: str, nonce: int) -> str:
-    msg = f"{server_seed}:{client_seed}:{nonce}".encode()
-    return hashlib.sha256(msg).hexdigest()
+async def require_admin(user: User = Depends(get_current_user)) -> User:
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin only")
+    return user
