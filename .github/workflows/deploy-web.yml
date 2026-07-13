@@ -24,13 +24,16 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
+          node-version: 22
 
       - name: Install dependencies
         working-directory: apps/web
-        run: npm install --no-audit --no-fund
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
 
       - name: Build static export
         working-directory: apps/web
@@ -41,7 +44,8 @@ jobs:
 
       - name: Add SPA fallback
         working-directory: apps/web/out
-        run: cp index.html 404.html
+        run: |
+          if [ -f index.html ]; then cp index.html 404.html; fi
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
