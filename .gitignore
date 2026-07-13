@@ -1,50 +1,62 @@
-# Node
+# Dependencies
 node_modules/
-.next/
-.turbo/
-out/
-build/
-dist/
-*.tsbuildinfo
-next-env.d.ts
-
-# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
+*.pyc
+*.pyo
+*.pyd
 .Python
-.venv/
 venv/
+.venv/
 env/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-*.egg-info/
+ENV/
 
-# Env
+# Build outputs
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# Environment
 .env
 .env.local
 .env.*.local
 !.env.example
+
+# Logs
+*.log
+logs/
+pids/
+*.pid
+*.seed
+*.pid.lock
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 .DS_Store
 
 # Docker
-postgres_data/
-redis_data/
+docker-compose.override.yml
 
-# Logs
-*.log
-logs/
+# Test
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
 
-# Backups
-backups/*.sql
-backups/*.tar.gz
+# Database
+*.db
+*.sqlite
+pgdata/
+redisdata/
+
+# Certs
+deploy/certbot/conf/
+deploy/certbot/www/
+
+# Media
+public/uploads/
