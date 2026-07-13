@@ -1,136 +1,184 @@
-"""Admin endpoints: user mgmt, coin mgmt, stats, promo creation, logs."""
-from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException, Request, status
+"""Admin endpoints (require is_admin)."""
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, insert, update, func
+from sqlalchemy import select, desc, func
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import AdminUser
-from app.db.models import User, PromoCode, AuditLog, GameRound, Notification
-from app.services.audit import log_audit
+from app.core.database import get_session
+from app.core.security import require_admin
+from app.models import User, GameBet, Notification, AuditLog, PromoCode
 
 router = APIRouter()
 
 
-class CoinUpdateRequest(BaseModel):
-    user_id: int
-    delta: int
-    reason: str
-
-
-class BanRequest(BaseModel):
-    user_id: int
-    ban: bool
-    reason: str | None = None
-
-
-class PromoCreateRequest(BaseModel):
-    code: str
-    reward_coins: int
-    max_uses: int = 1
-    expires_at: datetime | None = None
-
-
-class BroadcastRequest(BaseModel):
-    type: str = "system"
-    title: str
-    body: str
-
-
 @router.get("/stats")
-async def stats(_: AdminUser, request: Request):
-    db = request.state.db
-    user_count = (await db.execute(select(func.count(User.id)))).scalar() or 0
-    total_coins = (await db.execute(select(func.coalesce(func.sum(User.coins), 0)))).scalar() or 0
-    total_wagered = (await db.execute(select(func.coalesce(func.sum(User.total_wagered), 0)))).scalar() or 0
-    rounds_today = (await db.execute(
-        select(func.count(GameRound.id)).where(GameRound.created_at > datetime.utcnow() - timedelta(days=1))
-    )).scalar() or 0
+async def stats(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    total_users = (await db.execute(select(func.count(User.id)))).scalar() or 0
+    banned = (await db.execute(select(func.count(User.id)).where(User.is_banned == True))).scalar() or 0  # noqa: E712
+    total_bets = (await db.execute(select(func.count(GameBet.id)))).scalar() or 0
+    total_wagered = (await db.execute(select(func.sum(GameBet.bet_amount)))).scalar() or 0
+    total_payout = (await db.execute(select(func.sum(GameBet.payout)))).scalar() or 0
     return {
-        "users": user_count, "total_coins": total_coins,
-        "total_wagered": total_wagered, "rounds_today": rounds_today,
+        "total_users": total_users,
+        "banned_users": banned,
+        "total_bets": total_bets,
+        "total_wagered": total_wagered,
+        "total_payout": total_payout,
+        "house_profit": total_wagered - total_payout,
     }
 
 
 @router.get("/users")
-async def list_users(_: AdminUser, request: Request, limit: int = 50, offset: int = 0):
-    db = request.state.db
-    limit = max(1, min(200, limit))
-    offset = max(0, offset)
-    users = (await db.execute(
-        select(User).order_by(User.created_at.desc()).limit(limit).offset(offset)
-    )).scalars().all()
+async def list_users(
+    limit: int = 50,
+    offset: int = 0,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    res = await db.execute(
+        select(User).order_by(desc(User.id)).limit(min(limit, 200)).offset(offset)
+    )
+    users = res.scalars().all()
     return [
         {
-            "id": u.id, "telegram_id": u.telegram_id, "username": u.username,
-            "first_name": u.first_name, "coins": u.coins, "level": u.level,
-            "is_admin": u.is_admin, "is_banned": u.is_banned, "is_premium": u.is_premium,
-            "games_played": u.games_played, "total_wagered": u.total_wagered,
+            "id": u.id,
+            "telegram_id": u.telegram_id,
+            "username": u.username,
+            "first_name": u.first_name,
+            "coins": u.coins,
+            "level": u.level,
+            "is_banned": u.is_banned,
+            "is_admin": u.is_admin,
             "created_at": u.created_at.isoformat() if u.created_at else None,
         }
         for u in users
     ]
 
 
+class CoinAdjust(BaseModel):
+    user_id: int
+    delta: int
+    reason: str = ""
+
+
 @router.post("/coins")
-async def adjust_coins(body: CoinUpdateRequest, _: AdminUser, request: Request):
-    db = request.state.db
-    user = (await db.execute(select(User).where(User.id == body.user_id))).scalar_one_or_none()
-    if not user:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
-    user.coins = max(0, user.coins + body.delta)
-    await log_audit(db, user.id, "admin.coins", target_user_id=user.id, metadata={"delta": body.delta, "reason": body.reason})
-    return {"ok": True, "new_balance": user.coins}
+async def adjust_coins(
+    req: CoinAdjust,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    res = await db.execute(select(User).where(User.id == req.user_id))
+    target = res.scalar_one_or_none()
+    if not target:
+        raise HTTPException(404, "User not found")
+    target.coins += req.delta
+    db.add(AuditLog(
+        actor_id=admin.id, action="adjust_coins",
+        target=str(req.user_id),
+        details={"delta": req.delta, "reason": req.reason},
+    ))
+    await db.commit()
+    return {"ok": True, "new_balance": target.coins}
+
+
+class BanRequest(BaseModel):
+    user_id: int
+    ban: bool
+    reason: str = ""
 
 
 @router.post("/ban")
-async def ban_user(body: BanRequest, _: AdminUser, request: Request):
-    db = request.state.db
-    user = (await db.execute(select(User).where(User.id == body.user_id))).scalar_one_or_none()
-    if not user:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
-    user.is_banned = body.ban
-    await log_audit(db, user.id, "admin.ban", target_user_id=user.id, metadata={"banned": body.ban, "reason": body.reason})
-    return {"ok": True, "is_banned": user.is_banned}
+async def ban_user(
+    req: BanRequest,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    res = await db.execute(select(User).where(User.id == req.user_id))
+    target = res.scalar_one_or_none()
+    if not target:
+        raise HTTPException(404, "User not found")
+    target.is_banned = req.ban
+    db.add(AuditLog(
+        actor_id=admin.id,
+        action="ban" if req.ban else "unban",
+        target=str(req.user_id),
+        details={"reason": req.reason},
+    ))
+    await db.commit()
+    return {"ok": True, "is_banned": target.is_banned}
+
+
+class PromoCreate(BaseModel):
+    code: str
+    reward_coins: int
+    max_uses: int = 1
 
 
 @router.post("/promo")
-async def create_promo(body: PromoCreateRequest, _: AdminUser, request: Request):
-    db = request.state.db
-    code = body.code.upper()
-    existing = (await db.execute(select(PromoCode).where(PromoCode.code == code))).scalar_one_or_none()
-    if existing:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Code already exists")
-    await db.execute(insert(PromoCode).values(
-        code=code, reward_coins=body.reward_coins,
-        max_uses=body.max_uses, expires_at=body.expires_at, is_active=True,
-    ))
+async def create_promo(
+    req: PromoCreate,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    code = req.code.strip().upper()
+    res = await db.execute(select(PromoCode).where(PromoCode.code == code))
+    if res.scalar_one_or_none():
+        raise HTTPException(400, "Code already exists")
+    pc = PromoCode(code=code, reward_coins=req.reward_coins, max_uses=req.max_uses)
+    db.add(pc)
+    await db.commit()
     return {"ok": True, "code": code}
 
 
 @router.get("/logs")
-async def list_logs(_: AdminUser, request: Request, limit: int = 100, action: str | None = None):
-    db = request.state.db
-    limit = max(1, min(500, limit))
-    q = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)
+async def list_logs(
+    limit: int = 100,
+    action: str | None = None,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    q = select(AuditLog).order_by(desc(AuditLog.id)).limit(min(limit, 500))
     if action:
         q = q.where(AuditLog.action == action)
-    rows = (await db.execute(q)).scalars().all()
+    res = await db.execute(q)
+    logs = res.scalars().all()
     return [
         {
-            "id": l.id, "actor_id": l.actor_id, "action": l.action,
-            "target_user_id": l.target_user_id, "ip": l.ip,
-            "metadata": l.metadata_json, "created_at": l.created_at.isoformat() if l.created_at else None,
+            "id": l.id,
+            "actor_id": l.actor_id,
+            "action": l.action,
+            "target": l.target,
+            "details": l.details,
+            "created_at": l.created_at.isoformat() if l.created_at else None,
         }
-        for l in rows
+        for l in logs
     ]
 
 
+class Broadcast(BaseModel):
+    title: str
+    body: str
+    type: str = "announcement"
+
+
 @router.post("/broadcast")
-async def broadcast(body: BroadcastRequest, _: AdminUser, request: Request):
-    db = request.state.db
-    user_ids = (await db.execute(select(User.id))).scalars().all()
+async def broadcast(
+    req: Broadcast,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    res = await db.execute(select(User.id))
+    user_ids = [r[0] for r in res.all()]
     for uid in user_ids:
-        await db.execute(insert(Notification).values(
-            user_id=uid, type=body.type, title=body.title, body=body.body,
+        db.add(Notification(
+            user_id=uid, type=req.type, title=req.title, body=req.body,
         ))
-    return {"ok": True, "delivered": len(user_ids)}
+    db.add(AuditLog(
+        actor_id=admin.id, action="broadcast",
+        details={"title": req.title, "recipients": len(user_ids)},
+    ))
+    await db.commit()
+    return {"ok": True, "recipients": len(user_ids)}
